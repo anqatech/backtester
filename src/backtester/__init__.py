@@ -7,6 +7,7 @@ from .signals import (
     TrendSignalCalculator,
     TrendSignalSettings,
 )
+from .universe import UniverseSnapshotLoader
 
 __all__ = [
     "BacktesterDataLoader",
@@ -16,4 +17,5 @@ __all__ = [
     "TickerDataBundle",
     "TrendSignalCalculator",
     "TrendSignalSettings",
+    "UniverseSnapshotLoader",
 ]

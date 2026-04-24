@@ -71,3 +71,16 @@ builder.build_universe(overwrite=False)
 ```
 
 The builder uses `tickers_enriched.csv` as the canonical universe list and writes one enriched parquet per ticker into `daily-bars-signals`.
+
+```python
+from backtester import UniverseSnapshotLoader
+
+snapshot_loader = UniverseSnapshotLoader()
+snapshot = snapshot_loader.load_snapshot(
+    "2026-04-22",
+    columns=["ticker", "date", "close", "tsmom_1y", "relmom_12_1", "trend_signal_ready"],
+    ready_only=True,
+)
+```
+
+By default the snapshot loader returns the latest available row on or before the requested date for each ticker. Set `exact_match=True` if you want only rows from the exact date.
