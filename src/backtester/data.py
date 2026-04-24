@@ -9,15 +9,6 @@ from typing import Iterable
 
 import pandas as pd
 
-DEFAULT_DAILY_BARS_DIR = Path(
-    "/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/daily-bars"
-)
-DEFAULT_FRAMES_DIR = Path(
-    "/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/frames"
-)
-TREND_SIGNALS_FILENAME = "daily-bars-trend-signals.parquet"
-REALIZED_VOLATILITY_FILENAME = "daily-bars-realized-volatility.parquet"
-
 
 @dataclass(frozen=True, slots=True)
 class DataPaths:
@@ -25,28 +16,67 @@ class DataPaths:
 
     daily_bars_dir: Path
     frames_dir: Path
+    universe_csv_path: Path
+    daily_signals_dir: Path
+    database_status_filename: str = "daily-bars-database-status-with-market-cap.parquet"
 
     @classmethod
-    def from_env(cls) -> "DataPaths":
+    def from_env(cls, env_file: str | Path | None = None) -> "DataPaths":
+        resolved_env_file = cls._resolve_env_file(env_file)
+        if resolved_env_file is not None and resolved_env_file.exists():
+            from dotenv import load_dotenv
+
+            load_dotenv(resolved_env_file, override=False)
+
+        daily_bars_dir = os.environ.get("BACKTESTER_DAILY_BARS_DIR")
+        frames_dir = os.environ.get("BACKTESTER_FRAMES_DIR")
+        universe_csv_path = os.environ.get("BACKTESTER_UNIVERSE_CSV_PATH")
+        daily_signals_dir = os.environ.get("BACKTESTER_DAILY_SIGNALS_DIR")
+        missing = [
+            variable_name
+            for variable_name, value in (
+                ("BACKTESTER_DAILY_BARS_DIR", daily_bars_dir),
+                ("BACKTESTER_FRAMES_DIR", frames_dir),
+                ("BACKTESTER_UNIVERSE_CSV_PATH", universe_csv_path),
+                ("BACKTESTER_DAILY_SIGNALS_DIR", daily_signals_dir),
+            )
+            if not value
+        ]
+
+        if missing:
+            missing_variables = ", ".join(missing)
+            raise ValueError(
+                f"Missing required environment variables: {missing_variables}. "
+                "Set them in the project .env file or in the shell environment."
+            )
+
         return cls(
-            daily_bars_dir=Path(
-                os.environ.get("BACKTESTER_DAILY_BARS_DIR", DEFAULT_DAILY_BARS_DIR)
-            ),
-            frames_dir=Path(
-                os.environ.get("BACKTESTER_FRAMES_DIR", DEFAULT_FRAMES_DIR)
-            ),
+            daily_bars_dir=Path(daily_bars_dir).expanduser(),
+            frames_dir=Path(frames_dir).expanduser(),
+            universe_csv_path=Path(universe_csv_path).expanduser(),
+            daily_signals_dir=Path(daily_signals_dir).expanduser(),
         )
 
     @property
-    def trend_signals_path(self) -> Path:
-        return self.frames_dir / TREND_SIGNALS_FILENAME
-
-    @property
-    def realized_volatility_path(self) -> Path:
-        return self.frames_dir / REALIZED_VOLATILITY_FILENAME
+    def database_status_path(self) -> Path:
+        return self.frames_dir / self.database_status_filename
 
     def price_history_path(self, ticker: str) -> Path:
         return self.daily_bars_dir / f"{BacktesterDataLoader.normalize_ticker(ticker)}.parquet"
+
+    def signal_history_path(self, ticker: str) -> Path:
+        return self.daily_signals_dir / f"{BacktesterDataLoader.normalize_ticker(ticker)}.parquet"
+
+    @staticmethod
+    def _resolve_env_file(env_file: str | Path | None) -> Path | None:
+        if env_file is not None:
+            return Path(env_file).expanduser()
+
+        project_root = Path(__file__).resolve().parents[2]
+        candidate = project_root / ".env"
+        if candidate.exists():
+            return candidate
+        return None
 
 
 @dataclass(slots=True)
@@ -55,8 +85,7 @@ class TickerDataBundle:
 
     ticker: str
     price_history: pd.DataFrame
-    trend_signals: pd.DataFrame
-    realized_volatility: pd.DataFrame
+    database_status: pd.DataFrame
 
 
 class BacktesterDataLoader:
@@ -66,8 +95,8 @@ class BacktesterDataLoader:
         self.paths = paths or DataPaths.from_env()
 
     @classmethod
-    def from_env(cls) -> "BacktesterDataLoader":
-        return cls(paths=DataPaths.from_env())
+    def from_env(cls, env_file: str | Path | None = None) -> "BacktesterDataLoader":
+        return cls(paths=DataPaths.from_env(env_file=env_file))
 
     @staticmethod
     def normalize_ticker(ticker: str) -> str:
@@ -85,24 +114,30 @@ class BacktesterDataLoader:
         self._ensure_exists(path)
         return pd.read_parquet(path, columns=self._as_list(columns))
 
-    def load_trend_signals(
+    def load_signal_history(
         self,
-        ticker: str | None = None,
+        ticker: str,
         columns: Iterable[str] | None = None,
     ) -> pd.DataFrame:
-        return self._load_shared_frame(
-            path=self.paths.trend_signals_path,
-            ticker=ticker,
-            columns=columns,
-        )
+        path = self.paths.signal_history_path(ticker)
+        self._ensure_exists(path)
+        return pd.read_parquet(path, columns=self._as_list(columns))
 
-    def load_realized_volatility(
+    def load_universe(
+        self,
+        columns: Iterable[str] | None = None,
+    ) -> pd.DataFrame:
+        path = self.paths.universe_csv_path
+        self._ensure_exists(path)
+        return pd.read_csv(path, usecols=self._as_list(columns))
+
+    def load_database_status(
         self,
         ticker: str | None = None,
         columns: Iterable[str] | None = None,
     ) -> pd.DataFrame:
         return self._load_shared_frame(
-            path=self.paths.realized_volatility_path,
+            path=self.paths.database_status_path,
             ticker=ticker,
             columns=columns,
         )
@@ -111,7 +146,7 @@ class BacktesterDataLoader:
         self,
         ticker: str,
         price_columns: Iterable[str] | None = None,
-        frame_columns: Iterable[str] | None = None,
+        status_columns: Iterable[str] | None = None,
     ) -> TickerDataBundle:
         normalized_ticker = self.normalize_ticker(ticker)
         return TickerDataBundle(
@@ -120,13 +155,9 @@ class BacktesterDataLoader:
                 normalized_ticker,
                 columns=price_columns,
             ),
-            trend_signals=self.load_trend_signals(
+            database_status=self.load_database_status(
                 normalized_ticker,
-                columns=frame_columns,
-            ),
-            realized_volatility=self.load_realized_volatility(
-                normalized_ticker,
-                columns=frame_columns,
+                columns=status_columns,
             ),
         )
 

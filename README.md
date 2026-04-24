@@ -7,19 +7,25 @@ Small initial scaffold for a Python backtesting package built around your local 
 - installable `src/` package layout
 - `BacktesterDataLoader` class for loading:
   - one ticker's daily bars from `daily-bars/<TICKER>.parquet`
-  - one ticker's row from `daily-bars-trend-signals.parquet`
-  - one ticker's row from `daily-bars-realized-volatility.parquet`
-- configurable dataset paths, with sensible defaults for your current `jnbooks` directories
+  - one ticker's row from `daily-bars-database-status-with-market-cap.parquet`
+- `TrendSignalCalculator` for computing daily:
+  - log returns
+  - realized volatility over 1m, 3m, 6m, and 1y windows
+  - per-ticker trend components from the trend-signal note
+- configurable dataset paths loaded from a local `.env` file
 
-## Default data locations
+## Environment file
 
-- daily bars: `/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/daily-bars`
-- frames: `/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/frames`
+Create a `.env` file in the project root with:
 
-You can override them with:
+```env
+BACKTESTER_DAILY_BARS_DIR=/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/daily-bars
+BACKTESTER_FRAMES_DIR=/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/frames
+BACKTESTER_UNIVERSE_CSV_PATH=/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/sp500/tickers_enriched.csv
+BACKTESTER_DAILY_SIGNALS_DIR=/Users/jalalelhazzat/Documents/Codex-Projects/jnbooks/data/daily-bars-signals
+```
 
-- `BACKTESTER_DAILY_BARS_DIR`
-- `BACKTESTER_FRAMES_DIR`
+`BacktesterDataLoader.from_env()` will load that file automatically.
 
 ## Example
 
@@ -30,6 +36,38 @@ loader = BacktesterDataLoader.from_env()
 bundle = loader.load_ticker_bundle("AAPL")
 
 prices = bundle.price_history
-trend = bundle.trend_signals
-realized_vol = bundle.realized_volatility
+status = bundle.database_status
 ```
+
+```python
+from backtester import TrendSignalCalculator
+
+calculator = TrendSignalCalculator()
+enriched = calculator.build_enriched_price_history("AAPL")
+
+enriched[[
+    "date",
+    "close",
+    "log_return",
+    "realized_vol_3m",
+    "tsmom_3m",
+    "tsmom_6m",
+    "tsmom_1y",
+    "relmom_12_1",
+    "price_to_sma_200",
+    "sma_50_to_sma_200",
+    "trend_signal_ready",
+]].tail()
+```
+
+The reference-date logic uses calendar offsets and then walks back to the previous available trading day if the exact target date is missing.
+
+```python
+from backtester import SignalStoreBuilder
+
+builder = SignalStoreBuilder()
+builder.build_ticker("AAPL", overwrite=True)
+builder.build_universe(overwrite=False)
+```
+
+The builder uses `tickers_enriched.csv` as the canonical universe list and writes one enriched parquet per ticker into `daily-bars-signals`.
