@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import ClassVar, Iterable
 
 import pandas as pd
 
@@ -12,7 +12,7 @@ from .data import BacktesterDataLoader
 class UniverseSnapshotLoader:
     """Load cross-sectional as-of snapshots from per-ticker signal files."""
 
-    CROSS_SECTIONAL_DEPENDENCIES = {
+    CROSS_SECTIONAL_DEPENDENCIES: ClassVar[dict[str, list[str]]] = {
         "z_tsmom_3m": ["tsmom_3m"],
         "z_tsmom_6m": ["tsmom_6m"],
         "z_tsmom_1y": ["tsmom_1y"],
@@ -32,7 +32,7 @@ class UniverseSnapshotLoader:
             "sma_50_to_sma_200",
         ],
     }
-    NON_PERSISTED_COLUMNS = set(CROSS_SECTIONAL_DEPENDENCIES)
+    NON_PERSISTED_COLUMNS: ClassVar[set[str]] = set(CROSS_SECTIONAL_DEPENDENCIES)
 
     def __init__(self, data_loader: BacktesterDataLoader | None = None) -> None:
         self.data_loader = data_loader or BacktesterDataLoader.from_env()

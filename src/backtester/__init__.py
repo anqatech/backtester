@@ -1,9 +1,8 @@
 """Public package interface for the backtester scaffold."""
 
-from .backtests import (
+from .backtesting import (
     BacktestResult,
     SingleTickerBacktester,
-    SmaCrossStrategy,
     UniverseBacktester,
     run_sma_cross_universe_backtest,
     simulate_sma_cross_strategy,
@@ -18,6 +17,7 @@ from .signals import (
     TrendSignalCalculator,
     TrendSignalSettings,
 )
+from .strategies import SmaCrossStrategy
 from .universe import UniverseSnapshotLoader
 
 __all__ = [

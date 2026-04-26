@@ -5,10 +5,9 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from backtester.backtests import (
+from backtester.backtesting import (
     BacktestResult,
     SingleTickerBacktester,
-    SmaCrossStrategy,
     UniverseBacktester,
     run_sma_cross_universe_backtest,
     simulate_sma_cross_strategy,
@@ -17,6 +16,7 @@ from backtester.backtests import (
     summarize_trades_by_ticker,
 )
 from backtester.data import BacktesterDataLoader, DataPaths
+from backtester.strategies import SmaCrossStrategy
 
 
 class SmaCrossBacktestTests(unittest.TestCase):
