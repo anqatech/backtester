@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ._shared import max_drawdown
+from .common import max_drawdown
 from .result import BacktestResult
 
 

@@ -8,7 +8,7 @@ import pandas as pd
 
 from ..data import BacktesterDataLoader
 from ..strategies import SmaCrossStrategy
-from ._shared import aggregate_portfolio_series, position_columns, resolve_tickers, trade_columns
+from .common import aggregate_portfolio_series, position_columns, resolve_tickers, trade_columns
 from .result import BacktestResult
 from .single_ticker import SingleTickerBacktester
 
