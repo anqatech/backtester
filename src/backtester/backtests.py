@@ -23,6 +23,9 @@ def simulate_sma_cross_strategy(
     history: pd.DataFrame,
     ticker: str | None = None,
     trade_notional: float = 10_000.0,
+    reference_vol: float = 0.35,
+    min_notional: float = 5_000.0,
+    max_notional: float = 20_000.0,
     entry_threshold: float = 1.0,
     exit_threshold: float = 0.99,
     holding_period_months: int = 1,
@@ -58,7 +61,14 @@ def simulate_sma_cross_strategy(
 
         if state == "flat" and pending_entry_index == index:
             entry_price = float(row["close"])
-            shares = trade_notional / entry_price
+            scaled_notional = _scaled_trade_notional(
+                base_notional=trade_notional,
+                entry_realized_vol_3m=float(pending_entry_realized_vol_3m),
+                reference_vol=reference_vol,
+                min_notional=min_notional,
+                max_notional=max_notional,
+            )
+            shares = scaled_notional / entry_price
             expiry_threshold_date = current_date + pd.DateOffset(months=holding_period_months)
             open_trade = {
                 "ticker": ticker_value,
@@ -69,7 +79,7 @@ def simulate_sma_cross_strategy(
                 "entry_date": current_date,
                 "entry_price": entry_price,
                 "shares": shares,
-                "notional": float(trade_notional),
+                "notional": scaled_notional,
                 "expiry_threshold_date": expiry_threshold_date,
                 "exit_signal_date": pd.NaT,
                 "exit_date": pd.NaT,
@@ -170,6 +180,9 @@ def run_sma_cross_universe_backtest(
     data_loader: BacktesterDataLoader | None = None,
     tickers: Iterable[str] | None = None,
     trade_notional: float = 10_000.0,
+    reference_vol: float = 0.35,
+    min_notional: float = 5_000.0,
+    max_notional: float = 20_000.0,
     entry_threshold: float = 1.0,
     exit_threshold: float = 0.99,
     holding_period_months: int = 1,
@@ -198,6 +211,9 @@ def run_sma_cross_universe_backtest(
             history=history,
             ticker=ticker,
             trade_notional=trade_notional,
+            reference_vol=reference_vol,
+            min_notional=min_notional,
+            max_notional=max_notional,
             entry_threshold=entry_threshold,
             exit_threshold=exit_threshold,
             holding_period_months=holding_period_months,
@@ -286,6 +302,26 @@ def _finalize_trade(
         "pnl": pnl,
         "return": (exit_price / open_trade["entry_price"]) - 1.0,
     }
+
+
+def _scaled_trade_notional(
+    base_notional: float,
+    entry_realized_vol_3m: float,
+    reference_vol: float,
+    min_notional: float,
+    max_notional: float,
+) -> float:
+    if reference_vol <= 0:
+        raise ValueError("reference_vol must be positive.")
+    if min_notional <= 0 or max_notional <= 0:
+        raise ValueError("min_notional and max_notional must be positive.")
+    if min_notional > max_notional:
+        raise ValueError("min_notional cannot be greater than max_notional.")
+    if entry_realized_vol_3m <= 0:
+        raise ValueError("entry_realized_vol_3m must be positive for volatility scaling.")
+
+    raw_notional = base_notional * (reference_vol / entry_realized_vol_3m)
+    return float(min(max(raw_notional, min_notional), max_notional))
 
 
 def _position_rows_for_trade(

@@ -37,7 +37,8 @@ class SmaCrossBacktestTests(unittest.TestCase):
         self.assertAlmostEqual(trade["exit_realized_vol_3m"], 0.34)
         self.assertAlmostEqual(trade["exit_realized_vol_1y"], 0.44)
         self.assertEqual(trade["exit_reason"], "signal_exit")
-        self.assertAlmostEqual(trade["shares"], 10_000.0 / 102.0)
+        self.assertAlmostEqual(trade["notional"], 10_000.0 * (0.35 / 0.31))
+        self.assertAlmostEqual(trade["shares"], trade["notional"] / 102.0)
         self.assertAlmostEqual(trade["pnl"], trade["shares"] * (104.0 - 102.0))
         self.assertEqual(result.positions["date"].tolist(), [pd.Timestamp("2026-01-07"), pd.Timestamp("2026-01-08")])
 
@@ -100,6 +101,34 @@ class SmaCrossBacktestTests(unittest.TestCase):
 
         self.assertEqual(len(result.trades), 2)
         self.assertEqual(result.trades["entry_date"].tolist(), [pd.Timestamp("2026-01-05"), pd.Timestamp("2026-02-12")])
+
+    def test_volatility_scaled_notional_respects_reference_and_bounds(self) -> None:
+        high_vol_history = pd.DataFrame(
+            {
+                "ticker": ["AAPL"] * 4,
+                "date": pd.bdate_range("2026-01-05", periods=4),
+                "close": [100.0, 101.0, 102.0, 103.0],
+                "sma_50_to_sma_200": [0.98, 1.02, 1.03, 0.98],
+                "realized_vol_3m": [0.80, 0.80, 0.80, 0.80],
+                "realized_vol_1y": [0.40, 0.40, 0.40, 0.40],
+            }
+        )
+        low_vol_history = pd.DataFrame(
+            {
+                "ticker": ["MSFT"] * 4,
+                "date": pd.bdate_range("2026-01-05", periods=4),
+                "close": [200.0, 201.0, 202.0, 203.0],
+                "sma_50_to_sma_200": [0.98, 1.02, 1.03, 0.98],
+                "realized_vol_3m": [0.10, 0.10, 0.10, 0.10],
+                "realized_vol_1y": [0.30, 0.30, 0.30, 0.30],
+            }
+        )
+
+        high_vol_result = simulate_sma_cross_strategy(high_vol_history)
+        low_vol_result = simulate_sma_cross_strategy(low_vol_history)
+
+        self.assertAlmostEqual(high_vol_result.trades.iloc[0]["notional"], 5_000.0)
+        self.assertAlmostEqual(low_vol_result.trades.iloc[0]["notional"], 20_000.0)
 
     def test_universe_runner_combines_trades_across_tickers(self) -> None:
         with TemporaryDirectory() as temp_dir:
