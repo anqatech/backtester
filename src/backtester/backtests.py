@@ -45,6 +45,8 @@ def simulate_sma_cross_strategy(
     pending_entry_index: int | None = None
     pending_entry_signal_date = pd.NaT
     pending_entry_signal_value = pd.NA
+    pending_entry_realized_vol_3m = pd.NA
+    pending_entry_realized_vol_1y = pd.NA
     pending_exit_index: int | None = None
     pending_exit_signal_date = pd.NaT
     open_trade: dict | None = None
@@ -62,6 +64,8 @@ def simulate_sma_cross_strategy(
                 "ticker": ticker_value,
                 "signal_date": pending_entry_signal_date,
                 "entry_signal_value": pending_entry_signal_value,
+                "entry_realized_vol_3m": pending_entry_realized_vol_3m,
+                "entry_realized_vol_1y": pending_entry_realized_vol_1y,
                 "entry_date": current_date,
                 "entry_price": entry_price,
                 "shares": shares,
@@ -77,6 +81,8 @@ def simulate_sma_cross_strategy(
             pending_entry_index = None
             pending_entry_signal_date = pd.NaT
             pending_entry_signal_value = pd.NA
+            pending_entry_realized_vol_3m = pd.NA
+            pending_entry_realized_vol_1y = pd.NA
 
         if state == "long" and open_trade is not None:
             if current_date >= open_trade["expiry_threshold_date"]:
@@ -132,6 +138,8 @@ def simulate_sma_cross_strategy(
             pending_entry_index = index + 1
             pending_entry_signal_date = current_date
             pending_entry_signal_value = float(row["sma_50_to_sma_200"])
+            pending_entry_realized_vol_3m = float(row["realized_vol_3m"])
+            pending_entry_realized_vol_1y = float(row["realized_vol_1y"])
 
     if state == "long" and open_trade is not None and force_exit_at_end:
         final_index = len(frame) - 1
@@ -177,7 +185,14 @@ def run_sma_cross_universe_backtest(
     for ticker in selected_tickers:
         history = loader.load_signal_history(
             ticker,
-            columns=["ticker", "date", "close", "sma_50_to_sma_200"],
+            columns=[
+                "ticker",
+                "date",
+                "close",
+                "sma_50_to_sma_200",
+                "realized_vol_3m",
+                "realized_vol_1y",
+            ],
         )
         result = simulate_sma_cross_strategy(
             history=history,
@@ -209,7 +224,7 @@ def run_sma_cross_universe_backtest(
 
 
 def _prepare_history(history: pd.DataFrame, ticker: str | None) -> pd.DataFrame:
-    required_columns = {"date", "close", "sma_50_to_sma_200"}
+    required_columns = {"date", "close", "sma_50_to_sma_200", "realized_vol_3m", "realized_vol_1y"}
     missing_columns = required_columns.difference(history.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
@@ -219,7 +234,11 @@ def _prepare_history(history: pd.DataFrame, ticker: str | None) -> pd.DataFrame:
     frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
     frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
     frame["sma_50_to_sma_200"] = pd.to_numeric(frame["sma_50_to_sma_200"], errors="coerce")
-    frame = frame.dropna(subset=["date", "close", "sma_50_to_sma_200"]).sort_values("date").reset_index(drop=True)
+    frame["realized_vol_3m"] = pd.to_numeric(frame["realized_vol_3m"], errors="coerce")
+    frame["realized_vol_1y"] = pd.to_numeric(frame["realized_vol_1y"], errors="coerce")
+    frame = frame.dropna(
+        subset=["date", "close", "sma_50_to_sma_200", "realized_vol_3m", "realized_vol_1y"]
+    ).sort_values("date").reset_index(drop=True)
     frame = frame.drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
     if "ticker" in frame.columns:
@@ -249,6 +268,8 @@ def _finalize_trade(
         "ticker": open_trade["ticker"],
         "signal_date": open_trade["signal_date"],
         "entry_signal_value": open_trade["entry_signal_value"],
+        "entry_realized_vol_3m": open_trade["entry_realized_vol_3m"],
+        "entry_realized_vol_1y": open_trade["entry_realized_vol_1y"],
         "entry_date": open_trade["entry_date"],
         "entry_price": open_trade["entry_price"],
         "shares": open_trade["shares"],
@@ -257,6 +278,8 @@ def _finalize_trade(
         "exit_signal_date": exit_signal_date if exit_signal_date is not None else pd.NaT,
         "exit_date": exit_row["date"],
         "exit_signal_value": float(exit_row["sma_50_to_sma_200"]),
+        "exit_realized_vol_3m": float(exit_row["realized_vol_3m"]),
+        "exit_realized_vol_1y": float(exit_row["realized_vol_1y"]),
         "exit_price": exit_price,
         "exit_reason": exit_reason,
         "holding_days": int((exit_row["date"] - open_trade["entry_date"]).days),
@@ -358,6 +381,8 @@ def _trade_columns() -> list[str]:
         "ticker",
         "signal_date",
         "entry_signal_value",
+        "entry_realized_vol_3m",
+        "entry_realized_vol_1y",
         "entry_date",
         "entry_price",
         "shares",
@@ -366,6 +391,8 @@ def _trade_columns() -> list[str]:
         "exit_signal_date",
         "exit_date",
         "exit_signal_value",
+        "exit_realized_vol_3m",
+        "exit_realized_vol_1y",
         "exit_price",
         "exit_reason",
         "holding_days",
