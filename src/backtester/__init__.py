@@ -2,6 +2,9 @@
 
 from .backtests import (
     BacktestResult,
+    SingleTickerBacktester,
+    SmaCrossStrategy,
+    UniverseBacktester,
     run_sma_cross_universe_backtest,
     simulate_sma_cross_strategy,
     summarize_backtest,
@@ -23,10 +26,13 @@ __all__ = [
     "DataPaths",
     "SignalBuildResult",
     "SignalStoreBuilder",
+    "SingleTickerBacktester",
+    "SmaCrossStrategy",
     "TickerDataBundle",
     "TrendSignalCalculator",
     "TrendSignalSettings",
     "UniverseSnapshotLoader",
+    "UniverseBacktester",
     "run_sma_cross_universe_backtest",
     "simulate_sma_cross_strategy",
     "summarize_backtest",

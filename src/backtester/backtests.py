@@ -19,6 +19,238 @@ class BacktestResult:
     portfolio: pd.DataFrame
 
 
+@dataclass(slots=True, frozen=True)
+class SmaCrossStrategy:
+    """Parameter bundle and rule definitions for the first SMA-cross strategy."""
+
+    trade_notional: float = 10_000.0
+    reference_vol: float = 0.35
+    min_notional: float = 5_000.0
+    max_notional: float = 20_000.0
+    entry_threshold: float = 1.0
+    exit_threshold: float = 0.99
+    holding_period_months: int = 1
+    force_exit_at_end: bool = True
+
+    def required_columns(self) -> list[str]:
+        return [
+            "date",
+            "close",
+            "sma_50_to_sma_200",
+            "realized_vol_3m",
+            "realized_vol_1y",
+        ]
+
+    def entry_signal(self, previous_row: pd.Series, row: pd.Series) -> bool:
+        return (
+            float(previous_row["sma_50_to_sma_200"]) < self.entry_threshold
+            and float(row["sma_50_to_sma_200"]) >= self.entry_threshold
+        )
+
+    def exit_signal(self, row: pd.Series) -> bool:
+        return float(row["sma_50_to_sma_200"]) < self.exit_threshold
+
+    def position_notional(self, entry_realized_vol_3m: float) -> float:
+        return _scaled_trade_notional(
+            base_notional=self.trade_notional,
+            entry_realized_vol_3m=entry_realized_vol_3m,
+            reference_vol=self.reference_vol,
+            min_notional=self.min_notional,
+            max_notional=self.max_notional,
+        )
+
+
+class SingleTickerBacktester:
+    """Stateful simulator for running a strategy against one ticker history."""
+
+    def __init__(self, strategy: SmaCrossStrategy) -> None:
+        self.strategy = strategy
+
+    def run(self, history: pd.DataFrame, ticker: str | None = None) -> BacktestResult:
+        frame = _prepare_history(history=history, ticker=ticker)
+        if len(frame) < 2:
+            return _empty_backtest_result()
+
+        ticker_value = frame["ticker"].iloc[0]
+        trades: list[dict] = []
+        positions: list[dict] = []
+
+        state = "flat"
+        pending_entry_index: int | None = None
+        pending_entry_signal: dict | None = None
+        pending_exit_index: int | None = None
+        pending_exit_signal_date = pd.NaT
+        open_trade: dict | None = None
+
+        for index in range(1, len(frame)):
+            row = frame.iloc[index]
+            previous_row = frame.iloc[index - 1]
+            current_date = row["date"]
+
+            if state == "flat" and pending_entry_index == index and pending_entry_signal is not None:
+                open_trade = self._open_trade(
+                    ticker=ticker_value,
+                    signal_data=pending_entry_signal,
+                    entry_row=row,
+                    entry_index=index,
+                )
+                state = "long"
+                pending_entry_index = None
+                pending_entry_signal = None
+
+            if state == "long" and open_trade is not None:
+                if current_date >= open_trade["expiry_threshold_date"]:
+                    trades.append(
+                        _finalize_trade(
+                            open_trade=open_trade,
+                            exit_row=row,
+                            exit_reason="time_exit",
+                        )
+                    )
+                    positions.extend(
+                        _position_rows_for_trade(
+                            frame=frame,
+                            trade=open_trade,
+                            exit_index=index,
+                        )
+                    )
+                    open_trade = None
+                    state = "flat"
+                    pending_exit_index = None
+                    pending_exit_signal_date = pd.NaT
+                elif pending_exit_index == index:
+                    trades.append(
+                        _finalize_trade(
+                            open_trade=open_trade,
+                            exit_row=row,
+                            exit_reason="signal_exit",
+                            exit_signal_date=pending_exit_signal_date,
+                        )
+                    )
+                    positions.extend(
+                        _position_rows_for_trade(
+                            frame=frame,
+                            trade=open_trade,
+                            exit_index=index,
+                        )
+                    )
+                    open_trade = None
+                    state = "flat"
+                    pending_exit_index = None
+                    pending_exit_signal_date = pd.NaT
+                elif self.strategy.exit_signal(row) and index + 1 < len(frame):
+                    pending_exit_index = index + 1
+                    pending_exit_signal_date = current_date
+
+            if (
+                state == "flat"
+                and pending_entry_index is None
+                and self.strategy.entry_signal(previous_row, row)
+                and index + 1 < len(frame)
+            ):
+                pending_entry_index = index + 1
+                pending_entry_signal = {
+                    "signal_date": current_date,
+                    "entry_signal_value": float(row["sma_50_to_sma_200"]),
+                    "entry_realized_vol_3m": float(row["realized_vol_3m"]),
+                    "entry_realized_vol_1y": float(row["realized_vol_1y"]),
+                }
+
+        if state == "long" and open_trade is not None and self.strategy.force_exit_at_end:
+            final_index = len(frame) - 1
+            final_row = frame.iloc[final_index]
+            trades.append(
+                _finalize_trade(
+                    open_trade=open_trade,
+                    exit_row=final_row,
+                    exit_reason="end_of_data",
+                )
+            )
+            positions.extend(
+                _position_rows_for_trade(
+                    frame=frame,
+                    trade=open_trade,
+                    exit_index=final_index,
+                )
+            )
+
+        trades_df = pd.DataFrame(trades, columns=_trade_columns())
+        positions_df = pd.DataFrame(positions, columns=_position_columns())
+        portfolio_df = _aggregate_portfolio_series(positions_df, trades_df)
+
+        return BacktestResult(trades=trades_df, positions=positions_df, portfolio=portfolio_df)
+
+    def _open_trade(
+        self,
+        ticker: str,
+        signal_data: dict,
+        entry_row: pd.Series,
+        entry_index: int,
+    ) -> dict:
+        entry_price = float(entry_row["close"])
+        scaled_notional = self.strategy.position_notional(signal_data["entry_realized_vol_3m"])
+        shares = scaled_notional / entry_price
+        expiry_threshold_date = entry_row["date"] + pd.DateOffset(months=self.strategy.holding_period_months)
+        return {
+            "ticker": ticker,
+            "signal_date": signal_data["signal_date"],
+            "entry_signal_value": signal_data["entry_signal_value"],
+            "entry_realized_vol_3m": signal_data["entry_realized_vol_3m"],
+            "entry_realized_vol_1y": signal_data["entry_realized_vol_1y"],
+            "entry_date": entry_row["date"],
+            "entry_price": entry_price,
+            "shares": shares,
+            "notional": scaled_notional,
+            "expiry_threshold_date": expiry_threshold_date,
+            "exit_signal_date": pd.NaT,
+            "exit_date": pd.NaT,
+            "exit_price": pd.NA,
+            "exit_reason": pd.NA,
+            "_entry_index": entry_index,
+        }
+
+
+class UniverseBacktester:
+    """Coordinator for running one strategy across a ticker universe."""
+
+    def __init__(
+        self,
+        strategy: SmaCrossStrategy,
+        data_loader: BacktesterDataLoader | None = None,
+    ) -> None:
+        self.strategy = strategy
+        self.data_loader = data_loader or BacktesterDataLoader.from_env()
+        self.single_ticker_backtester = SingleTickerBacktester(strategy)
+
+    def run(self, tickers: Iterable[str] | None = None) -> BacktestResult:
+        selected_tickers = _resolve_tickers(self.data_loader, tickers)
+
+        all_trades: list[pd.DataFrame] = []
+        all_positions: list[pd.DataFrame] = []
+        columns = ["ticker", *self.strategy.required_columns()]
+        for ticker in selected_tickers:
+            history = self.data_loader.load_signal_history(ticker, columns=columns)
+            result = self.single_ticker_backtester.run(history=history, ticker=ticker)
+            if not result.trades.empty:
+                all_trades.append(result.trades)
+            if not result.positions.empty:
+                all_positions.append(result.positions)
+
+        trades_df = (
+            pd.concat(all_trades, ignore_index=True)
+            if all_trades
+            else pd.DataFrame(columns=_trade_columns())
+        )
+        positions_df = (
+            pd.concat(all_positions, ignore_index=True)
+            if all_positions
+            else pd.DataFrame(columns=_position_columns())
+        )
+        portfolio_df = _aggregate_portfolio_series(positions_df, trades_df)
+
+        return BacktestResult(trades=trades_df, positions=positions_df, portfolio=portfolio_df)
+
+
 def simulate_sma_cross_strategy(
     history: pd.DataFrame,
     ticker: str | None = None,
@@ -33,147 +265,17 @@ def simulate_sma_cross_strategy(
 ) -> BacktestResult:
     """Simulate the first SMA cross strategy for one ticker history."""
 
-    frame = _prepare_history(history=history, ticker=ticker)
-    if len(frame) < 2:
-        empty_trades = pd.DataFrame(columns=_trade_columns())
-        empty_positions = pd.DataFrame(columns=_position_columns())
-        empty_portfolio = _aggregate_portfolio_series(empty_positions, empty_trades)
-        return BacktestResult(trades=empty_trades, positions=empty_positions, portfolio=empty_portfolio)
-
-    ticker_value = frame["ticker"].iloc[0]
-    trades: list[dict] = []
-    positions: list[dict] = []
-
-    state = "flat"
-    pending_entry_index: int | None = None
-    pending_entry_signal_date = pd.NaT
-    pending_entry_signal_value = pd.NA
-    pending_entry_realized_vol_3m = pd.NA
-    pending_entry_realized_vol_1y = pd.NA
-    pending_exit_index: int | None = None
-    pending_exit_signal_date = pd.NaT
-    open_trade: dict | None = None
-
-    for index in range(1, len(frame)):
-        row = frame.iloc[index]
-        previous_row = frame.iloc[index - 1]
-        current_date = row["date"]
-
-        if state == "flat" and pending_entry_index == index:
-            entry_price = float(row["close"])
-            scaled_notional = _scaled_trade_notional(
-                base_notional=trade_notional,
-                entry_realized_vol_3m=float(pending_entry_realized_vol_3m),
-                reference_vol=reference_vol,
-                min_notional=min_notional,
-                max_notional=max_notional,
-            )
-            shares = scaled_notional / entry_price
-            expiry_threshold_date = current_date + pd.DateOffset(months=holding_period_months)
-            open_trade = {
-                "ticker": ticker_value,
-                "signal_date": pending_entry_signal_date,
-                "entry_signal_value": pending_entry_signal_value,
-                "entry_realized_vol_3m": pending_entry_realized_vol_3m,
-                "entry_realized_vol_1y": pending_entry_realized_vol_1y,
-                "entry_date": current_date,
-                "entry_price": entry_price,
-                "shares": shares,
-                "notional": scaled_notional,
-                "expiry_threshold_date": expiry_threshold_date,
-                "exit_signal_date": pd.NaT,
-                "exit_date": pd.NaT,
-                "exit_price": pd.NA,
-                "exit_reason": pd.NA,
-                "_entry_index": index,
-            }
-            state = "long"
-            pending_entry_index = None
-            pending_entry_signal_date = pd.NaT
-            pending_entry_signal_value = pd.NA
-            pending_entry_realized_vol_3m = pd.NA
-            pending_entry_realized_vol_1y = pd.NA
-
-        if state == "long" and open_trade is not None:
-            if current_date >= open_trade["expiry_threshold_date"]:
-                trades.append(
-                    _finalize_trade(
-                        open_trade=open_trade,
-                        exit_row=row,
-                        exit_reason="time_exit",
-                    )
-                )
-                positions.extend(
-                    _position_rows_for_trade(
-                        frame=frame,
-                        trade=open_trade,
-                        exit_index=index,
-                    )
-                )
-                open_trade = None
-                state = "flat"
-                pending_exit_index = None
-                pending_exit_signal_date = pd.NaT
-            elif pending_exit_index == index:
-                trades.append(
-                    _finalize_trade(
-                        open_trade=open_trade,
-                        exit_row=row,
-                        exit_reason="signal_exit",
-                        exit_signal_date=pending_exit_signal_date,
-                    )
-                )
-                positions.extend(
-                    _position_rows_for_trade(
-                        frame=frame,
-                        trade=open_trade,
-                        exit_index=index,
-                    )
-                )
-                open_trade = None
-                state = "flat"
-                pending_exit_index = None
-                pending_exit_signal_date = pd.NaT
-            elif float(row["sma_50_to_sma_200"]) < exit_threshold and index + 1 < len(frame):
-                pending_exit_index = index + 1
-                pending_exit_signal_date = current_date
-
-        if (
-            state == "flat"
-            and pending_entry_index is None
-            and float(previous_row["sma_50_to_sma_200"]) < entry_threshold
-            and float(row["sma_50_to_sma_200"]) >= entry_threshold
-            and index + 1 < len(frame)
-        ):
-            pending_entry_index = index + 1
-            pending_entry_signal_date = current_date
-            pending_entry_signal_value = float(row["sma_50_to_sma_200"])
-            pending_entry_realized_vol_3m = float(row["realized_vol_3m"])
-            pending_entry_realized_vol_1y = float(row["realized_vol_1y"])
-
-    if state == "long" and open_trade is not None and force_exit_at_end:
-        final_index = len(frame) - 1
-        final_row = frame.iloc[final_index]
-        trades.append(
-            _finalize_trade(
-                open_trade=open_trade,
-                exit_row=final_row,
-                exit_reason="end_of_data",
-            )
-        )
-        positions.extend(
-            _position_rows_for_trade(
-                frame=frame,
-                trade=open_trade,
-                exit_index=final_index,
-            )
-        )
-
-    trades_df = pd.DataFrame(trades, columns=_trade_columns())
-    positions_df = pd.DataFrame(positions, columns=_position_columns())
-    portfolio_df = _aggregate_portfolio_series(positions_df, trades_df)
-
-    return BacktestResult(trades=trades_df, positions=positions_df, portfolio=portfolio_df)
+    strategy = SmaCrossStrategy(
+        trade_notional=trade_notional,
+        reference_vol=reference_vol,
+        min_notional=min_notional,
+        max_notional=max_notional,
+        entry_threshold=entry_threshold,
+        exit_threshold=exit_threshold,
+        holding_period_months=holding_period_months,
+        force_exit_at_end=force_exit_at_end,
+    )
+    return SingleTickerBacktester(strategy).run(history=history, ticker=ticker)
 
 
 def run_sma_cross_universe_backtest(
@@ -190,53 +292,24 @@ def run_sma_cross_universe_backtest(
 ) -> BacktestResult:
     """Run the SMA cross strategy independently across a ticker universe."""
 
-    loader = data_loader or BacktesterDataLoader.from_env()
-    selected_tickers = _resolve_tickers(loader, tickers)
-
-    all_trades: list[pd.DataFrame] = []
-    all_positions: list[pd.DataFrame] = []
-    for ticker in selected_tickers:
-        history = loader.load_signal_history(
-            ticker,
-            columns=[
-                "ticker",
-                "date",
-                "close",
-                "sma_50_to_sma_200",
-                "realized_vol_3m",
-                "realized_vol_1y",
-            ],
-        )
-        result = simulate_sma_cross_strategy(
-            history=history,
-            ticker=ticker,
-            trade_notional=trade_notional,
-            reference_vol=reference_vol,
-            min_notional=min_notional,
-            max_notional=max_notional,
-            entry_threshold=entry_threshold,
-            exit_threshold=exit_threshold,
-            holding_period_months=holding_period_months,
-            force_exit_at_end=force_exit_at_end,
-        )
-        if not result.trades.empty:
-            all_trades.append(result.trades)
-        if not result.positions.empty:
-            all_positions.append(result.positions)
-
-    trades_df = (
-        pd.concat(all_trades, ignore_index=True)
-        if all_trades
-        else pd.DataFrame(columns=_trade_columns())
+    strategy = SmaCrossStrategy(
+        trade_notional=trade_notional,
+        reference_vol=reference_vol,
+        min_notional=min_notional,
+        max_notional=max_notional,
+        entry_threshold=entry_threshold,
+        exit_threshold=exit_threshold,
+        holding_period_months=holding_period_months,
+        force_exit_at_end=force_exit_at_end,
     )
-    positions_df = (
-        pd.concat(all_positions, ignore_index=True)
-        if all_positions
-        else pd.DataFrame(columns=_position_columns())
-    )
-    portfolio_df = _aggregate_portfolio_series(positions_df, trades_df)
+    return UniverseBacktester(strategy=strategy, data_loader=data_loader).run(tickers=tickers)
 
-    return BacktestResult(trades=trades_df, positions=positions_df, portfolio=portfolio_df)
+
+def _empty_backtest_result() -> BacktestResult:
+    empty_trades = pd.DataFrame(columns=_trade_columns())
+    empty_positions = pd.DataFrame(columns=_position_columns())
+    empty_portfolio = _aggregate_portfolio_series(empty_positions, empty_trades)
+    return BacktestResult(trades=empty_trades, positions=empty_positions, portfolio=empty_portfolio)
 
 
 def summarize_backtest(result: BacktestResult) -> pd.Series:
