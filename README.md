@@ -99,14 +99,6 @@ Run the test suite with:
 python -m pytest
 ```
 
-The existing `unittest`-style tests are fully compatible with `pytest`, so there is no need to rewrite them first.
-
-If you want to keep using the standard library runner, this still works too:
-
-```bash
-python -m unittest discover -s tests -p 'test*.py'
-```
-
 Then run line and branch coverage with:
 
 ```bash
