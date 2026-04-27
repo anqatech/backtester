@@ -84,7 +84,14 @@ def aggregate_portfolio_series(
         )
 
     if positions.empty:
-        positions_daily = pd.DataFrame(columns=["date", "active_positions", "gross_market_value", "unrealized_pnl"])
+        positions_daily = pd.DataFrame(
+            {
+                "date": pd.Series(dtype="datetime64[ns]"),
+                "active_positions": pd.Series(dtype="int64"),
+                "gross_market_value": pd.Series(dtype="float64"),
+                "unrealized_pnl": pd.Series(dtype="float64"),
+            }
+        )
     else:
         positions_daily = (
             positions.groupby("date", as_index=False)
@@ -96,7 +103,12 @@ def aggregate_portfolio_series(
         )
 
     if trades.empty:
-        realized_daily = pd.DataFrame(columns=["date", "realized_pnl"])
+        realized_daily = pd.DataFrame(
+            {
+                "date": pd.Series(dtype="datetime64[ns]"),
+                "realized_pnl": pd.Series(dtype="float64"),
+            }
+        )
     else:
         realized_daily = (
             trades.groupby("exit_date", as_index=False)
@@ -108,10 +120,18 @@ def aggregate_portfolio_series(
     for column in ["active_positions", "gross_market_value", "unrealized_pnl", "realized_pnl"]:
         if column not in portfolio.columns:
             portfolio[column] = 0.0
-    portfolio["active_positions"] = portfolio["active_positions"].fillna(0).astype("int64")
-    portfolio["gross_market_value"] = portfolio["gross_market_value"].fillna(0.0)
-    portfolio["unrealized_pnl"] = portfolio["unrealized_pnl"].fillna(0.0)
-    portfolio["realized_pnl"] = portfolio["realized_pnl"].fillna(0.0)
+    portfolio["active_positions"] = pd.to_numeric(
+        portfolio["active_positions"], errors="coerce"
+    ).fillna(0).astype("int64")
+    portfolio["gross_market_value"] = pd.to_numeric(
+        portfolio["gross_market_value"], errors="coerce"
+    ).fillna(0.0)
+    portfolio["unrealized_pnl"] = pd.to_numeric(
+        portfolio["unrealized_pnl"], errors="coerce"
+    ).fillna(0.0)
+    portfolio["realized_pnl"] = pd.to_numeric(
+        portfolio["realized_pnl"], errors="coerce"
+    ).fillna(0.0)
     portfolio["cumulative_realized_pnl"] = portfolio["realized_pnl"].cumsum()
     portfolio["total_pnl"] = portfolio["cumulative_realized_pnl"] + portfolio["unrealized_pnl"]
 
