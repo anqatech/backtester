@@ -21,7 +21,7 @@ class DataPaths:
     database_status_filename: str = "daily-bars-database-status-with-market-cap.parquet"
 
     @classmethod
-    def from_env(cls, env_file: str | Path | None = None) -> "DataPaths":
+    def from_env(cls, env_file: str | Path | None = None) -> DataPaths:
         resolved_env_file = cls._resolve_env_file(env_file)
         if resolved_env_file is not None and resolved_env_file.exists():
             from dotenv import load_dotenv
@@ -72,7 +72,7 @@ class DataPaths:
         if env_file is not None:
             return Path(env_file).expanduser()
 
-        project_root = Path(__file__).resolve().parents[2]
+        project_root = Path(__file__).resolve().parents[3]
         candidate = project_root / ".env"
         if candidate.exists():
             return candidate
@@ -95,7 +95,7 @@ class BacktesterDataLoader:
         self.paths = paths or DataPaths.from_env()
 
     @classmethod
-    def from_env(cls, env_file: str | Path | None = None) -> "BacktesterDataLoader":
+    def from_env(cls, env_file: str | Path | None = None) -> BacktesterDataLoader:
         return cls(paths=DataPaths.from_env(env_file=env_file))
 
     @staticmethod

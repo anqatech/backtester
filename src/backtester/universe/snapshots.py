@@ -6,7 +6,7 @@ from typing import ClassVar, Iterable
 
 import pandas as pd
 
-from .data import BacktesterDataLoader
+from ..data import BacktesterDataLoader
 
 
 class UniverseSnapshotLoader:
