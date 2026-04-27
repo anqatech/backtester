@@ -84,3 +84,40 @@ snapshot = snapshot_loader.load_snapshot(
 ```
 
 By default the snapshot loader returns the latest available row on or before the requested date for each ticker. Set `exact_match=True` if you want only rows from the exact date.
+
+## Tests and coverage
+
+Install the optional development dependency group to get `pytest` and `coverage.py`:
+
+```bash
+pip install -e '.[dev]'
+```
+
+Run the test suite with:
+
+```bash
+python -m pytest
+```
+
+The existing `unittest`-style tests are fully compatible with `pytest`, so there is no need to rewrite them first.
+
+If you want to keep using the standard library runner, this still works too:
+
+```bash
+python -m unittest discover -s tests -p 'test*.py'
+```
+
+Then run line and branch coverage with:
+
+```bash
+python -m coverage run -m pytest
+python -m coverage report -m
+```
+
+You can also generate an HTML report:
+
+```bash
+python -m coverage html
+```
+
+The coverage configuration lives in [pyproject.toml](/Users/jalalelhazzat/Documents/Codex-Projects/backtester/pyproject.toml) and is scoped to the `backtester` package.

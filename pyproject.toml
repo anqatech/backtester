@@ -14,5 +14,30 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "coverage[toml]>=7.6",
+    "pytest>=8.3",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["backtester"]
+omit = [
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 1
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "pragma: no cover",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

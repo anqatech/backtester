@@ -23,7 +23,12 @@ ENV/
 .coverage
 .coverage.*
 htmlcov/
+.hypothesis/
+.tox/
+.nox/
 .mypy_cache/
+.pyre/
+.pytype/
 .ruff_cache/
 
 # Jupyter
